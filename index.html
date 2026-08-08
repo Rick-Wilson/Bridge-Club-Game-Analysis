@@ -387,6 +387,9 @@ let cachedPlayers = [];
 let cachedBoards = [];
 let currentBoard = null;
 let currentPlayerName = null; // Track for row highlighting in board view
+// One-shot: which player the History view should open on, set by an import that
+// knows who it was about. Consumed on first use so later navigation is free.
+let historyFocusPlayer = null;
 let currentSessionIdx = 0;     // 0 = first session; only matters when many
 let cachedSessions = [];       // [{ session_idx, label, board_count, result_count }]
 
@@ -3456,11 +3459,17 @@ function renderHistory() {
   // to the previous dropdown value, then the first player alphabetically.
   const prev = sel.value;
   sel.innerHTML = allPlayers.map(n => `<option value="${esc(n)}">${n}</option>`).join('');
-  if (currentPlayerName && allPlayers.includes(currentPlayerName)) {
+  // A just-finished import wins: landing on the first name alphabetically shows
+  // an unrelated player from an old upload, which reads as the import having
+  // failed.
+  if (historyFocusPlayer && allPlayers.includes(historyFocusPlayer)) {
+    sel.value = historyFocusPlayer;
+  } else if (currentPlayerName && allPlayers.includes(currentPlayerName)) {
     sel.value = currentPlayerName;
   } else if (prev && allPlayers.includes(prev)) {
     sel.value = prev;
   }
+  historyFocusPlayer = null;
 
   renderHistoryPlayer(sel.value);
 }
@@ -3937,24 +3946,42 @@ async function runBatch(batchItems) {
     if (barEl) barEl.style.width = `${pct ?? 0}%`;
   };
 
-  const h = getHistory();
-  const hasTracked = h.events.some(ev => Object.keys(ev.players).length > 0);
+  // Who is this import about? Having *some* tracked player is not enough — the
+  // tracked set is global, so a month of BBO games would silently save nothing
+  // when the only tracked names came from an unrelated club upload. Ask whenever
+  // no tracked player actually appears in the data being imported.
+  //
+  // The first event stands in for the import: a capture is normally centred on
+  // one player, who therefore appears in every event. A tracked player present
+  // only in later events would prompt unnecessarily, which is the safe direction
+  // to be wrong in.
+  setStatus('Loading first event…', '', 0);
+  let firstGame;
+  try {
+    firstGame = await decompressJSON(batchItems[0].compressed);
+    enrichNormalized(firstGame);
+    cachedNormalized = firstGame;
+  } catch (e) {
+    setStatus('Error loading first event', e.message);
+    return;
+  }
+
+  const players = derivePlayers(firstGame, 0);
+  const trackedHere = players.filter(isPlayerTracked);
 
   let startIdx = 0;
 
-  if (!hasTracked) {
-    setStatus('Loading first event…', '', 0);
-    let firstGame;
-    try {
-      const firstEnvelope = await decompressJSON(batchItems[0].compressed);
-      enrichNormalized(firstEnvelope);
-      firstGame = firstEnvelope;
-      cachedNormalized = firstGame;
-    } catch (e) {
-      setStatus('Error loading first event', e.message);
-      return;
-    }
-    const players = derivePlayers(firstGame, 0);
+  // Which players this import actually produced history for, and how often. The
+  // most-seen one is who the import was about.
+  const importedCounts = new Map();
+  const bump = (name) => importedCounts.set(name, (importedCounts.get(name) ?? 0) + 1);
+  const trackedNames = () => {
+    const set = new Set();
+    for (const ev of getHistory().events) for (const n of Object.keys(ev.players)) set.add(n);
+    return set;
+  };
+
+  if (!trackedHere.length) {
     const selected = await showTrackModal(players);
     if (!selected) {
       document.getElementById('batch-progress').classList.add('hidden');
@@ -3964,7 +3991,7 @@ async function runBatch(batchItems) {
     }
     for (const name of selected) {
       const data = jsAnalyzePlayer(firstGame, 0, name);
-      if (data) savePlayerToHistory(name, data);
+      if (data) { savePlayerToHistory(name, data); bump(name); }
     }
     await saveToEventCache(eventCacheId(firstGame), firstGame);
     setStatus('Importing history…', `Saved 1 of ${total}`, Math.round(1 / total * 100));
@@ -3981,6 +4008,12 @@ async function runBatch(batchItems) {
       currentSessionIdx = 0;
       autoSaveTrackedPlayers(cachedNormalized);
       await saveToEventCache(eventCacheId(cachedNormalized), cachedNormalized);
+      // Read back per event rather than per name — one history parse, not one
+      // per player.
+      const tracked = trackedNames();
+      for (const name of derivePlayers(cachedNormalized, 0)) {
+        if (tracked.has(name)) bump(name);
+      }
     } catch (e) {
       skipped++;
     }
@@ -3994,6 +4027,11 @@ async function runBatch(batchItems) {
   // Set up minimal event-header state so the History tab is navigable
   cachedPlayers = cachedNormalized ? derivePlayers(cachedNormalized, 0) : [];
   cachedBoards = cachedNormalized ? deriveBoards(cachedNormalized, 0) : [];
+  // Highest count wins; name order breaks ties so the choice is deterministic.
+  const ranked = [...importedCounts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  if (ranked.length) historyFocusPlayer = ranked[0][0];
+
   document.getElementById('event-name').textContent = 'Batch Import';
   document.getElementById('event-date').textContent = `${saved} events`;
   document.getElementById('event-header').classList.remove('hidden');
