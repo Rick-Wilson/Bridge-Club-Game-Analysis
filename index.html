@@ -429,9 +429,17 @@ function playerKey(player) {
 /** Display name: lowercase, then capitalize the first letter of each
  *  whitespace-separated word. Mirrors PlayerId::display_name() — used so
  *  "LaFrancesca" round-trips to "Lafrancesca" the same way the server
- *  normalizes player identity. */
+ *  normalizes player identity.
+ *
+ *  A name with no whitespace is left exactly as it came. BBO players are
+ *  usernames, not names — "aam135" and "filostine" are how those people are
+ *  known, and title-casing them into "Aam135" and "Filostine" invents a
+ *  capital that is not theirs and does not match BBO's own rendering. Every
+ *  ACBL name has a space in it, so this only ever spares identifiers. */
 function displayName(name) {
-  return (name || '').trim().toLowerCase().split(/\s+/).map(w =>
+  const raw = (name || '').trim();
+  if (!/\s/.test(raw)) return raw;
+  return raw.toLowerCase().split(/\s+/).map(w =>
     w ? w[0].toUpperCase() + w.slice(1) : ''
   ).join(' ');
 }
@@ -3785,6 +3793,30 @@ function _formatHandLin(hand) {
   return s;
 }
 
+/** LIN `mb|` tokens for a real auction from the payload.
+ *
+ *  `result.auction` is canonical bid strings in call order starting with the
+ *  dealer — 'PASS' | 'X' | 'XX' | '1NT' | '2C' | … — which is exactly the order
+ *  LIN wants. BBO captures carry this (the adapter reads it out of the LIN's
+ *  own mb| tokens); ACBL sources do not and pass null, which is what
+ *  _buildBiddingLin is for.
+ *
+ *  Returns '' for anything unrecognised rather than emitting a malformed
+ *  auction — a wrong auction shown as real is worse than a synthetic one. */
+function _buildAuctionLin(auction) {
+  if (!Array.isArray(auction) || auction.length === 0) return '';
+  const tokens = [];
+  for (const call of auction) {
+    const c = String(call || '').toUpperCase();
+    if (c === 'PASS' || c === 'P')      tokens.push('mb|p|');
+    else if (c === 'X')                 tokens.push('mb|d|');
+    else if (c === 'XX')                tokens.push('mb|r|');
+    else if (/^[1-7](NT|[CDHS])$/.test(c)) tokens.push(`mb|${c.replace(/NT$/, 'N')}|`);
+    else return '';
+  }
+  return tokens.join('');
+}
+
 function _buildBiddingLin(dealer, contract, declarer) {
   const m = (contract || '').match(/^(\d)(NT|[CDHS])(X{0,2})$/);
   if (!m) return '';
@@ -3810,7 +3842,8 @@ function _buildHandviewerUrl(board, result) {
   if (!dealerDigit) return null;
   const vulCode = _BBO_VUL_CODE[board.vulnerability] ?? 'o';
 
-  // ns_pair players: [0]=North [1]=South; ew_pair: [0]=West [1]=East
+  // Seat order, per docs/normalized-schema.md in the extension repo:
+  // ns_pair.players = [North, South], ew_pair.players = [West, East].
   const np = result.ns_pair?.players, ep = result.ew_pair?.players;
   const n = np?.[0]?.name, s = np?.[1]?.name;
   const w = ep?.[0]?.name, e = ep?.[1]?.name;
@@ -3818,10 +3851,15 @@ function _buildHandviewerUrl(board, result) {
     ? `pn|${[s,w,n,e].map(nm => displayName(nm).replace(/ /g, '+')).join(',')}|`
     : '';
 
+  // Prefer the real auction when the payload has one — BBO captures do, and
+  // synthesising passes up to the contract throws away the bidding the user
+  // came to look at. Fall back to the contract-only auction for ACBL sources,
+  // which genuinely don't know what was bid.
   const c = result.contract;
-  const biddingSection = (c && c !== 'PASS' && result.declarer)
-    ? _buildBiddingLin(board.dealer, c, result.declarer)
-    : '';
+  const biddingSection = _buildAuctionLin(result.auction)
+    || ((c && c !== 'PASS' && result.declarer)
+      ? _buildBiddingLin(board.dealer, c, result.declarer)
+      : '');
 
   const lin = `${pnSection}md|${dealerDigit}${_formatHandLin(deal.S)},${_formatHandLin(deal.W)},${_formatHandLin(deal.N)},|sv|${vulCode}|ah|Board+${board.number}|${biddingSection}`;
   return `https://www.bridgebase.com/tools/handviewer.html?lin=${encodeURIComponent(lin)}`;
