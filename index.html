@@ -2801,25 +2801,141 @@ function buildDDStringFromSchema(boardDD) {
   return any ? out : null;
 }
 
-// Monotonic token guarding against an async DD race: a slow response (BSOL
-// fetch, or the first-board loadNormalized) from a board the user has already
-// navigated away from must not overwrite the current board's table. Each
-// fetchDD call supersedes the previous one; stale calls bail before rendering.
+// Monotonic token guarding against an async DD race: a slow solve (or the
+// first-board loadNormalized) for a board the user has already navigated away
+// from must not overwrite the current board's table. Each fetchDD call
+// supersedes the previous one; stale calls bail before rendering.
 let ddFetchSeq = 0;
+
+// ── Double-dummy, solved in this browser ────────────────────────────────────
+//
+// Our own wasm engine (bridge-solver), vendored under static/solver/ — the same
+// build solver.bridge-classroom.org runs, and it agrees byte-for-byte with the
+// bridge-solver-service droplet. Deliberately no network call and no fallback
+// to one: a deal never leaves the browser, which is what lets the privacy
+// policy say so plainly.
+//
+// Only BBO captures ever reach this. The ACBL adapters put double-dummy in the
+// schema, so those boards are answered from the payload without solving.
+
+/** Rewrite any PBN deal string to dealer-N form, so the same physical deal
+ *  spells one way in the cache. `dd_table` is per-declarer and so does not care
+ *  which seat leads the string, but two spellings would otherwise be two cache
+ *  entries. Returns the input unchanged if it doesn't parse. */
+function canonicalDealstr(pbn) {
+  if (!pbn) return '';
+  const flat = String(pbn).trim().replace(/\s+/g, ' ').toUpperCase();
+  const m = /^([NESW]):(.+)$/.exec(flat);
+  if (!m) return flat;
+  const hands = m[2].split(' ');
+  if (hands.length !== 4) return flat;
+  const order = ['N', 'E', 'S', 'W'];
+  const start = order.indexOf(m[1]);
+  const bySeat = {};
+  hands.forEach((h, i) => { bySeat[order[(start + i) % 4]] = h; });
+  return `N:${order.map(s => bySeat[s]).join(' ')}`;
+}
+
+// Solved tables persist across reloads: re-reviewing a session must not pay for
+// the same deals again, and on a slow device that difference is the whole
+// experience. One JSON object rather than a key each, so it can be trimmed;
+// entries are ~90 bytes, so the cap is well inside any quota.
+const DD_CACHE_KEY = 'bc-dd-cache';
+const DD_CACHE_MAX = 2000;
+const ddMemo = new Map();
+
+function ddCacheGet(key) {
+  if (ddMemo.has(key)) return ddMemo.get(key);
+  try {
+    const store = JSON.parse(localStorage.getItem(DD_CACHE_KEY) || '{}');
+    const hit = store[key];
+    if (hit) ddMemo.set(key, hit);
+    return hit || null;
+  } catch (e) { return null; }
+}
+
+function ddCachePut(key, ddtricks) {
+  ddMemo.set(key, ddtricks);
+  try {
+    const store = JSON.parse(localStorage.getItem(DD_CACHE_KEY) || '{}');
+    store[key] = ddtricks;
+    const keys = Object.keys(store);
+    // Oldest-first trim. Insertion order is good enough here — this is a cost
+    // cache, and evicting the wrong entry costs one re-solve, not correctness.
+    if (keys.length > DD_CACHE_MAX) {
+      for (const k of keys.slice(0, keys.length - DD_CACHE_MAX)) delete store[k];
+    }
+    localStorage.setItem(DD_CACHE_KEY, JSON.stringify(store));
+  } catch (e) {
+    // Quota, private mode, disabled storage — the memo still works for this
+    // session, so this is not worth surfacing.
+  }
+}
+
+let ddWorker = null;
+let ddWorkerSeq = 0;
+const ddPending = new Map();
+
+/** The solver worker, started on first use. Returns null if workers or module
+ *  workers aren't available, which the caller reports as "DD unavailable". */
+function getDdWorker() {
+  if (ddWorker !== null) return ddWorker;
+  try {
+    ddWorker = new Worker('static/solver/dd.worker.js', { type: 'module' });
+    ddWorker.onmessage = (e) => {
+      const { id, ddtricks, error } = e.data || {};
+      const pending = ddPending.get(id);
+      if (!pending) return;
+      ddPending.delete(id);
+      if (error) pending.reject(new Error(error));
+      else pending.resolve(ddtricks);
+    };
+    ddWorker.onerror = (e) => {
+      // A failure here is the module itself failing to load, which every queued
+      // and future solve shares. Fail them all rather than hanging.
+      for (const [, pending] of ddPending) pending.reject(new Error(e.message || 'solver worker failed'));
+      ddPending.clear();
+      ddWorker = false;
+    };
+  } catch (e) {
+    ddWorker = false;
+  }
+  return ddWorker;
+}
+
+/** Solve one deal's 20-cell table, or null if it can't be solved. */
+function solveDdTricks(dealstr) {
+  const key = canonicalDealstr(dealstr);
+  if (!key) return Promise.resolve(null);
+  const cached = ddCacheGet(key);
+  if (cached) return Promise.resolve(cached);
+
+  const worker = getDdWorker();
+  if (!worker) return Promise.resolve(null);
+
+  const id = ++ddWorkerSeq;
+  return new Promise((resolve, reject) => {
+    ddPending.set(id, { resolve, reject });
+    worker.postMessage({ id, dealstr: key });
+  }).then((ddtricks) => {
+    if (ddtricks) ddCachePut(key, ddtricks);
+    return ddtricks;
+  });
+}
+
 async function fetchDD(dealInfo, activeResult, boardNumber) {
   const token = ++ddFetchSeq;
   cachedDDTricks = null;
   const ddEl = document.getElementById('dd-section');
   ddEl.innerHTML = '<div class="bba-loading">Loading DD analysis...</div>';
 
-  // First try the normalized JSON — both adapters populate per-declarer
+  // First try the normalized JSON — the ACBL adapters populate per-declarer
   // DD when the source has it (PBN [DoubleDummyTricks] tag, ACBL Live's
-  // double-dummy block). Avoids hitting BSOL (which rate-limits 429s
-  // after a handful of consecutive board navigations) when we already
-  // have the same data locally. Lazy-load it on first board view if
-  // shadow mode hasn't already cached it.
+  // double-dummy block). Saves a round trip when we already have the same
+  // data locally. Lazy-load it on first board view if shadow mode hasn't
+  // already cached it.
   if (!cachedNormalized && boardNumber != null) {
-    try { await loadNormalized(); } catch (e) { /* fall through to BSOL */ }
+    try { await loadNormalized(); } catch (e) { /* fall through to the solver */ }
   }
   if (token !== ddFetchSeq) return; // a newer board render superseded this one
   if (cachedNormalized && boardNumber != null) {
@@ -2833,22 +2949,21 @@ async function fetchDD(dealInfo, activeResult, boardNumber) {
     }
   }
 
-  // Fall back to BSOL only when DD isn't in the schema (older PBN files
-  // without the [DoubleDummyTricks] tag).
+  // Solve it here when DD isn't in the schema — BBO captures never carry it
+  // (the adapter emits `double_dummy: null`), and older PBN files lack the
+  // [DoubleDummyTricks] tag.
+  //
+  // `dealInfo.pbn` is dealer-prefixed ("E:...") rather than always "N:", which
+  // canonicalDealstr rotates to N-first for the cache key. That rotation moves
+  // the hands with their seats, so the table is unchanged — do not "simplify"
+  // it into a bare prefix swap, which would silently produce a wrong table.
   try {
-    const pbn = dealInfo.pbn.replace(/ /g, 'x');
-    const vul = dealInfo.vulnerability === 'Both' ? 'All' : dealInfo.vulnerability;
-    const url = `https://dds.bridgewebs.com/cgi-bin/bsol2/ddummy?request=m&dealstr=${encodeURIComponent(pbn)}&vul=${vul}&club=clubgameanalysis`;
-    const res = await fetch(url);
-    if (token !== ddFetchSeq) return; // superseded while awaiting BSOL
-    if (!res.ok) { ddEl.innerHTML = '<div class="bba-loading">DD unavailable</div>'; return; }
-    const text = await res.text();
-    if (token !== ddFetchSeq) return; // superseded while reading the body
-    const json = JSON.parse(text.trim());
-    if (!json.sess || !json.sess.ddtricks || json.sess.ddtricks.length < 20) {
+    const ddtricks = await solveDdTricks(dealInfo.pbn);
+    if (token !== ddFetchSeq) return; // superseded while solving
+    if (!ddtricks || ddtricks.length < 20) {
       ddEl.innerHTML = '<div class="bba-loading">DD unavailable</div>'; return;
     }
-    cachedDDTricks = json.sess.ddtricks;
+    cachedDDTricks = ddtricks;
     renderDDTable(cachedDDTricks, activeResult);
   } catch (e) {
     if (token !== ddFetchSeq) return; // superseded; leave the current board's table alone

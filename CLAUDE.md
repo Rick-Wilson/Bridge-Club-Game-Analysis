@@ -114,7 +114,8 @@ notes that say otherwise.
 User → Cloudflare DNS (game-analysis.bridge-classroom.com) → GitHub Pages (this repo's index.html)
                               │
         client-side fetches → game-parser.bridge-craftwork.com  (bridge-event-parser-service — .bws/.pbn/.xml parsing)
-                            → dds.bridgewebs.com (BSOL double-dummy), bba.harmonicsystems.com (BBA auctions)
+                            → bba.harmonicsystems.com (BBA auctions)
+        in-browser wasm     → static/solver/ (bridge-solver — double-dummy, no network)
 ```
 
 - **Domain:** `game-analysis.bridge-classroom.com` (the committed `CNAME`; Cloudflare-proxied → GitHub Pages).
@@ -192,8 +193,16 @@ stale data.
 
 ### External API Integrations
 
-- **BSOL** (`dds.bridgewebs.com`): Double-dummy analysis for board view (called from browser)
 - **BBA** (`bba.harmonicsystems.com`): Sample auction generation (proxied through server to avoid CORS)
+
+Double-dummy is **not** an external call. It was BSOL (`dds.bridgewebs.com`)
+until August 2026; it is now our own `bridge-solver` wasm, vendored under
+`static/solver/` and run in a worker — see that directory's `README.md`. Only
+BBO captures ever solve, because the ACBL adapters put double-dummy in the
+normalized payload. Tables are cached in `localStorage` under `bc-dd-cache`,
+since one costs 190–1200 ms on a fast laptop and re-reviewing a session must not
+pay twice. Deliberately no network fallback: the privacy policy states that a
+deal never leaves the browser.
 
 ## Git Configuration
 
