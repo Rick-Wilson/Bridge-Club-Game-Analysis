@@ -3278,6 +3278,39 @@ const HISTORY_MAX_EVENTS = 150;
 const EVENT_CACHE_KEY = 'bc-event-cache';
 const EVENT_CACHE_MAX = 10;
 
+/** One-time migration: merge history player entries that differ only in
+ *  spelling. displayName stopped capitalising usernames (d68cd01), so one person
+ *  can already be stored as both "Kemistry" and "kemistry" — two rows in the
+ *  History picker, with their events split between them.
+ *
+ *  The canonical spelling is the one from the NEWEST event holding that player,
+ *  because that reflects how the app renders the name today. */
+function migrateHistoryPlayerKeys() {
+  const h = getHistory();
+  if ((h.version ?? 1) >= 2) return;
+  const canonical = new Map();
+  for (const ev of h.events) {                 // newest first (unshift order)
+    for (const name of Object.keys(ev.players)) {
+      const key = normalizeName(name);
+      if (!canonical.has(key)) canonical.set(key, name);
+    }
+  }
+  let merged = 0;
+  for (const ev of h.events) {
+    const rekeyed = {};
+    for (const [name, stats] of Object.entries(ev.players)) {
+      const target = canonical.get(normalizeName(name)) ?? name;
+      if (target !== name) merged++;
+      // Same player twice in one event can only be the same numbers; keep one.
+      if (!(target in rekeyed)) rekeyed[target] = stats;
+    }
+    ev.players = rekeyed;
+  }
+  h.version = 2;
+  setHistory(h);
+  if (merged) console.info(`[history] merged ${merged} player entr${merged === 1 ? 'y' : 'ies'} differing only in spelling`);
+}
+
 function getHistory() {
   try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '{"version":1,"events":[]}'); }
   catch (e) { return { version: 1, events: [] }; }
@@ -3450,23 +3483,35 @@ function deriveEventMeta() {
 }
 
 function autoSaveTrackedPlayers(game) {
-  const h = getHistory();
-  const tracked = new Set();
-  for (const ev of h.events) {
-    for (const name of Object.keys(ev.players)) tracked.add(name);
-  }
+  const tracked = trackedPlayerKeys();
   if (!tracked.size) return;
-  const inSession = new Set(derivePlayers(game, currentSessionIdx));
-  for (const name of tracked) {
-    if (!inSession.has(name)) continue;
+  // Walk the session rather than the tracked set: jsAnalyzePlayer has to be
+  // given the name as THIS event spells it, not as history happens to store it.
+  for (const name of derivePlayers(game, currentSessionIdx)) {
+    if (!tracked.has(normalizeName(name))) continue;
     const data = jsAnalyzePlayer(game, currentSessionIdx, name);
     if (data) savePlayerToHistory(name, data);
   }
 }
 
+/** All tracked players, as normalized identity keys → the history key they are
+ *  stored under. Compared normalized because the display form has changed over
+ *  time: history written before usernames stopped being capitalised (d68cd01)
+ *  holds "Kemistry", while the same player now derives as "kemistry". Matching
+ *  on the raw string silently loses every player tracked before that. */
+function trackedPlayerKeys() {
+  const byKey = new Map();
+  for (const ev of getHistory().events) {
+    for (const name of Object.keys(ev.players)) {
+      if (!byKey.has(normalizeName(name))) byKey.set(normalizeName(name), name);
+    }
+  }
+  return byKey;
+}
+
 /** A player is "tracked" iff they appear in any saved history event. */
 function isPlayerTracked(name) {
-  return getHistory().events.some(ev => ev.players[name]);
+  return trackedPlayerKeys().has(normalizeName(name));
 }
 
 function trackCurrentPlayer() {
@@ -3498,6 +3543,9 @@ function updateTrackButton() {
 }
 
 function savePlayerToHistory(playerName, data) {
+  // Reuse the spelling this player is already stored under, so a display-form
+  // change never splits one person into two history entries.
+  playerName = trackedPlayerKeys().get(normalizeName(playerName)) ?? playerName;
   const meta = deriveEventMeta();
   const eventId = `${meta.event_date || 'unknown'}|${meta.event_name}`;
   const causes = { Good: 0, Lucky: 0, Play: 0, Defense: 0, Auction: 0, Unlucky: 0 };
@@ -3585,8 +3633,10 @@ function renderHistory() {
   // A just-finished import wins: landing on the first name alphabetically shows
   // an unrelated player from an old upload, which reads as the import having
   // failed.
-  if (historyFocusPlayer && allPlayers.includes(historyFocusPlayer)) {
-    sel.value = historyFocusPlayer;
+  const focusMatch = historyFocusPlayer
+    && allPlayers.find(n => normalizeName(n) === normalizeName(historyFocusPlayer));
+  if (focusMatch) {
+    sel.value = focusMatch;
   } else if (currentPlayerName && allPlayers.includes(currentPlayerName)) {
     sel.value = currentPlayerName;
   } else if (prev && allPlayers.includes(prev)) {
@@ -4128,11 +4178,6 @@ async function runBatch(batchItems) {
   // most-seen one is who the import was about.
   const importedCounts = new Map();
   const bump = (name) => importedCounts.set(name, (importedCounts.get(name) ?? 0) + 1);
-  const trackedNames = () => {
-    const set = new Set();
-    for (const ev of getHistory().events) for (const n of Object.keys(ev.players)) set.add(n);
-    return set;
-  };
 
   if (!trackedHere.length) {
     const selected = await showTrackModal(players);
@@ -4162,10 +4207,12 @@ async function runBatch(batchItems) {
       autoSaveTrackedPlayers(cachedNormalized);
       await saveToEventCache(eventCacheId(cachedNormalized), cachedNormalized);
       // Read back per event rather than per name — one history parse, not one
-      // per player.
-      const tracked = trackedNames();
+      // per player. Bump the spelling history stores, not the one this event
+      // uses, so the tally lines up with the History picker's options.
+      const tracked = trackedPlayerKeys();
       for (const name of derivePlayers(cachedNormalized, 0)) {
-        if (tracked.has(name)) bump(name);
+        const stored = tracked.get(normalizeName(name));
+        if (stored) bump(stored);
       }
     } catch (e) {
       skipped++;
@@ -4298,6 +4345,8 @@ async function bootstrapAnalyze() {
     showLoading(false);
   }
 }
+
+try { migrateHistoryPlayerKeys(); } catch (e) { console.warn('[history] migration skipped', e); }
 
 if (isAnalyzePath()) {
   bootstrapAnalyze();
