@@ -2044,12 +2044,38 @@ function applyUploadResponse(data, opts) {
   document.getElementById('pbn-notice').classList.toggle('hidden', pbnHidden);
   renderSessionSelector();
   showNamesNotice(data);
-  const focusName = consumePendingFocusPlayer();
-  if (focusName && data.players?.includes(focusName)) {
-    goToPlayer(focusName);
+  // Land on a player rather than an empty grid, when we can name one:
+  //   1. an explicit stash (re-extracting a specific player from History)
+  //   2. otherwise whoever this browser follows and who actually played here
+  // Matched normalized — the stash and the history hold whatever spelling was
+  // current when they were written, which need not be this event's.
+  const inGame = (name) => name
+    && data.players?.find(p => normalizeName(p) === normalizeName(name));
+  const focus = inGame(consumePendingFocusPlayer()) || pickTrackedPlayerIn(data.players);
+  if (focus) {
+    goToPlayer(focus);
   } else {
     switchView('players');
   }
+}
+
+/** The tracked player who appears in `players` and has the most saved events —
+ *  in practice, whoever this browser is following. Null when none of them are
+ *  tracked, which is when the grid is genuinely the right screen. */
+function pickTrackedPlayerIn(players) {
+  if (!players?.length) return null;
+  const counts = new Map();
+  for (const ev of getHistory().events) {
+    for (const name of Object.keys(ev.players)) {
+      const key = normalizeName(name);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  }
+  const ranked = players
+    .map(p => ({ p, n: counts.get(normalizeName(p)) ?? 0 }))
+    .filter(x => x.n > 0)
+    .sort((a, b) => b.n - a.n || a.p.localeCompare(b.p));
+  return ranked.length ? ranked[0].p : null;
 }
 
 const PENDING_FOCUS_KEY = 'bc-pending-focus-player';
