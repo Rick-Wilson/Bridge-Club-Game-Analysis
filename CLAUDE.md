@@ -127,7 +127,7 @@ User → Cloudflare DNS (game-analysis.bridge-classroom.com) → GitHub Pages (t
   `handviewer_url`. LIN, not PBN: the solver's play trace needs the auction and
   cards, which PBN would not carry. Pinned to `.org` — there is no `.com`
   solver — so this one does *not* mirror the page TLD.
-- **Bridge Classroom hand-off:** `bcViewerUrl()` builds `bridge-classroom.{com|org}/solo-practice-app/#/bidding-practice?pbn=…` single-board replay links; the "Send to Library" button POSTs a whole game to `api.bridge-classroom.{com|org}/api/deal-library` (`bcApiBase()`), keyed to the teacher by a `?bc_owner=<id>` launch handshake from their Bridge Classroom Deal Library tab.
+- **Bridge Classroom hand-off:** `bcViewerUrl()` builds `bridge-classroom.{com|org}/solo-practice-app/#/table?pbn=…` single-board replay links (`#/bidding-practice` was retired when that route merged into the unified table — a stale hash route does not error, it falls through to the lobby and drops the `?pbn=`); the "Send to Library" button POSTs a whole game to `api.bridge-classroom.{com|org}/api/deal-library` (`bcApiBase()`), keyed to the teacher by a `?bc_owner=<id>` launch handshake from their Bridge Classroom Deal Library tab.
 
 ### Other Services on the Same Droplet
 

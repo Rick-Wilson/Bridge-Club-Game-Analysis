@@ -114,9 +114,12 @@ tr.clickable-row:hover td { background: #e0e7ff; }
 .bba-loading { color: var(--text-muted); font-size: 0.75rem; text-align: center; padding: 0.5rem; }
 
 .hand-viewer-frame { width: 100%; height: 500px; border: 1px solid var(--border); border-radius: var(--radius); }
-.viewer-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.4rem; }
+/* Three columns so the links sit centred over the viewer, not jammed against
+   its right edge: the label takes the first, the links the middle, and the
+   empty third balances the first. */
+.viewer-bar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: baseline; gap: 0.75rem; margin-bottom: 0.4rem; }
 .viewer-label { font-size: 0.8rem; font-weight: 500; color: var(--text-muted); }
-.viewer-links { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; justify-content: flex-end; }
+.viewer-links { display: flex; align-items: baseline; gap: 1.25rem; flex-wrap: wrap; justify-content: center; }
 .viewer-replay-link { font-size: 0.8rem; color: var(--primary, #2563eb); text-decoration: none; white-space: nowrap; }
 .viewer-replay-link:hover { text-decoration: underline; }
 
@@ -179,6 +182,8 @@ tr.clickable-row:hover td { background: #e0e7ff; }
   table { font-size: 0.75rem; }
   td, th { padding: 0.3rem 0.4rem; }
   .hand-viewer-frame { height: 380px; }
+  .viewer-bar { grid-template-columns: 1fr; }
+  .viewer-links { justify-content: flex-start; }
   .event-header { flex-direction: column; }
   .viewer-row { flex-direction: column; }
   .side-panel { width: 100%; max-height: none; }
@@ -1430,8 +1435,15 @@ function clickBoardRow(idx) {
 
 /** Mirror the current TLD: page on .org uses bridge-classroom.org viewer,
  *  .com uses .com. Falls back to .com for everything else (localhost,
- *  preview deploys, etc.). Override for local dev via:
- *    localStorage.setItem('bc-viewer-base', 'http://localhost:5173/solo-practice-app/#/bidding-practice')
+ *  preview deploys, etc.).
+ *
+ *  The route is `#/table` — the unified practice table. `#/bidding-practice`
+ *  was retired when the two were merged, and a retired hash route does not
+ *  error: it falls through the SPA's catch-all to the lobby, which drops the
+ *  `?pbn=` entirely. That is what a stale link looks like here.
+ *
+ *  Override for local dev via:
+ *    localStorage.setItem('bc-viewer-base', 'http://localhost:5173/solo-practice-app/#/table')
  *  Clear with: localStorage.removeItem('bc-viewer-base') */
 function bcViewerBase() {
   try {
@@ -1439,7 +1451,7 @@ function bcViewerBase() {
     if (override) return override;
   } catch (e) {}
   const tld = window.location.hostname.endsWith('.org') ? 'org' : 'com';
-  return `https://bridge-classroom.${tld}/solo-practice-app/#/bidding-practice`;
+  return `https://bridge-classroom.${tld}/solo-practice-app/#/table`;
 }
 
 /** The double-dummy solver's front door. Pinned to `.org`: as of 2026-08-24 no
