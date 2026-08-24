@@ -116,6 +116,7 @@ tr.clickable-row:hover td { background: #e0e7ff; }
 .hand-viewer-frame { width: 100%; height: 500px; border: 1px solid var(--border); border-radius: var(--radius); }
 .viewer-bar { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.4rem; }
 .viewer-label { font-size: 0.8rem; font-weight: 500; color: var(--text-muted); }
+.viewer-links { display: flex; align-items: baseline; gap: 0.75rem; flex-wrap: wrap; justify-content: flex-end; }
 .viewer-replay-link { font-size: 0.8rem; color: var(--primary, #2563eb); text-decoration: none; white-space: nowrap; }
 .viewer-replay-link:hover { text-decoration: underline; }
 
@@ -304,7 +305,10 @@ tr.clickable-row:hover td { background: #e0e7ff; }
       <div class="viewer-col">
         <div class="viewer-bar">
           <span class="viewer-label">BBO Hand Viewer</span>
-          <a id="bc-replay-link" class="viewer-replay-link hidden" target="_blank" rel="noopener" href="#">Open replay in Bridge Classroom ↗</a>
+          <span class="viewer-links">
+            <a id="bc-replay-link" class="viewer-replay-link hidden" target="_blank" rel="noopener" href="#">Open replay in Bridge Classroom ↗</a>
+            <a id="solver-link" class="viewer-replay-link hidden" target="_blank" rel="noopener" href="#">Open in Double-Dummy Solver ↗</a>
+          </span>
         </div>
         <iframe id="board-viewer" class="hand-viewer-frame" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" allowfullscreen></iframe>
       </div>
@@ -1438,6 +1442,41 @@ function bcViewerBase() {
   return `https://bridge-classroom.${tld}/solo-practice-app/#/bidding-practice`;
 }
 
+/** The double-dummy solver's front door. Pinned to `.org`: as of 2026-08-24 no
+ *  solver is served on `.com`, so this deliberately does NOT mirror the page's
+ *  TLD the way bcViewerBase() does. Override for local dev via:
+ *    localStorage.setItem('bc-solver-base', 'http://localhost:5173/') */
+function bcSolverBase() {
+  try {
+    const override = localStorage.getItem('bc-solver-base');
+    if (override) return override;
+  } catch (e) {}
+  return 'https://solver.bridge-classroom.org/';
+}
+
+/** Hand the solver the same LIN the embedded viewer is showing.
+ *
+ *  LIN rather than PBN on purpose: the solver's whole point here is the play
+ *  trace with each error tagged, and PBN would carry only the deal. The LIN
+ *  already has the auction — the real one for BBO captures, along with the
+ *  cards played; a synthesised one for ACBL sources, which never knew it (see
+ *  _buildHandviewerUrl). Returns null when this row has no viewer URL, or one
+ *  we cannot read a `lin` out of. */
+function solverUrl(bboUrl) {
+  if (!bboUrl) return null;
+  let lin = null;
+  try {
+    const u = new URL(bboUrl, 'https://www.bridgebase.com/');
+    // BBO writes the payload in the query, but handviewer links in the wild
+    // also carry it after the hash. Accept both, as the ingest page does.
+    const hashQuery = u.hash.includes('?') ? u.hash.slice(u.hash.indexOf('?') + 1) : '';
+    lin = u.searchParams.get('lin') || new URLSearchParams(hashQuery).get('lin');
+  } catch (e) { return null; }
+  if (!lin || !lin.trim()) return null;
+  const base = bcSolverBase();
+  return `${base}${base.includes('?') ? '&' : '?'}lin=${encodeURIComponent(lin.trim())}`;
+}
+
 /** Bridge Classroom API base, TLD-mirrored like bcViewerBase(). Override for
  *  local dev: localStorage.setItem('bc-api-base', 'http://localhost:3000/api') */
 function bcApiBase() {
@@ -1572,6 +1611,14 @@ function setViewerRow(idx) {
     const bcUrl = bcViewerUrl(currentBoardData?.deal_info, seat);
     if (bcUrl) replayLink.href = bcUrl;
     replayLink.classList.toggle('hidden', !bcUrl);
+  }
+  // And at the solver, with the very LIN the iframe above is rendering — so the
+  // two always agree about which table's board is being looked at.
+  const ddLink = document.getElementById('solver-link');
+  if (ddLink) {
+    const ddUrl = solverUrl(nextUrl);
+    if (ddUrl) ddLink.href = ddUrl;
+    ddLink.classList.toggle('hidden', !ddUrl);
   }
 }
 

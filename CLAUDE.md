@@ -121,6 +121,12 @@ User → Cloudflare DNS (game-analysis.bridge-classroom.com) → GitHub Pages (t
 - **Domain:** `game-analysis.bridge-classroom.com` (the committed `CNAME`; Cloudflare-proxied → GitHub Pages).
 - **Deploy:** push to `main` → `.github/workflows/deploy.yml` (`actions/upload-pages-artifact` + `actions/deploy-pages`). The workflow copies `index.html` → `404.html` for SPA routing. No build step — the SPA is hand-authored `index.html` with inlined JS/CSS.
 - **Parsing backend:** `const BASE = 'https://game-parser.bridge-craftwork.com'` in `index.html` points at `bridge-event-parser-service` (a separate repo/service) for `/api/upload` / `/api/normalized`. Deals otherwise live client-side in `sessionStorage['bc-game']`.
+- **Double-dummy solver hand-off:** the board view's `solverUrl()` link opens
+  `solver.bridge-classroom.org/?lin=…` (`bcSolverBase()`) with the same LIN the
+  embedded BBO viewer is rendering, lifted straight out of the row's
+  `handviewer_url`. LIN, not PBN: the solver's play trace needs the auction and
+  cards, which PBN would not carry. Pinned to `.org` — there is no `.com`
+  solver — so this one does *not* mirror the page TLD.
 - **Bridge Classroom hand-off:** `bcViewerUrl()` builds `bridge-classroom.{com|org}/solo-practice-app/#/bidding-practice?pbn=…` single-board replay links; the "Send to Library" button POSTs a whole game to `api.bridge-classroom.{com|org}/api/deal-library` (`bcApiBase()`), keyed to the teacher by a `?bc_owner=<id>` launch handshake from their Bridge Classroom Deal Library tab.
 
 ### Other Services on the Same Droplet
