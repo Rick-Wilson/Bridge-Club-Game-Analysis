@@ -172,17 +172,36 @@ following sequence to hand off a freshly-scraped tournament:
    for ~2s and also listens for a `bridge-classroom-handoff` `window` event
    the extension can dispatch to short-circuit the wait.
 
-The SPA's `/analyze` bootstrap has three explicit states:
+The SPA's analyze bootstrap (`?analyze`, or a `/analyze` path on the old
+origin-root deploy) has four explicit states:
 
 - **DATA**: pending-session present, valid, accepted → normal player/board UI.
-- **EMPTY**: no pending-session → friendly card with link back to `/`.
+- **RESTORED**: no pending-session, but `sessionStorage["bc-game"]` still holds
+  the game → the analysis is re-rendered from it. This is the refresh case.
+- **EMPTY**: no pending-session and nothing cached → friendly card with a link
+  to `./?upload`.
 - **ERROR**: malformed JSON, unsupported `schema_version`, or server reject →
-  error card with the specific message and link back to `/`.
+  error card with the specific message and a link to `./?upload`.
 
 The fragment `#sid={uuid}` is for extension-side bookkeeping only; the SPA
 ignores it. Reads of `pending-session` are one-shot — consumed via
-`removeItem` immediately so a refresh shows EMPTY rather than re-applying
-stale data.
+`removeItem` immediately so a refresh cannot re-apply stale data.
+
+### URL routing
+
+The route params name *entries*, not screens, so the SPA consumes them:
+
+- `?analyze` is a one-shot import. Once it has been handled (accepted, batch
+  started, or found already-consumed), `clearAnalyzeRoute()` `replaceState`s it
+  away — along with any `#sid=` — leaving the plain page URL. A refresh then
+  goes down the normal load path.
+- The normal load path restores `sessionStorage["bc-game"]` when it is there, so
+  a refresh shows the game rather than the upload card. "New File" clears that
+  cache (`resetSessionState`), so a dismissed game does not come back.
+- `?upload` forces the file-upload card and is *not* stripped, so it stays put
+  across a refresh. It exists because "go to the file-upload page" must land on
+  the upload card even for a browser with saved history, which otherwise opens
+  on the History view.
 
 ### Analytics
 

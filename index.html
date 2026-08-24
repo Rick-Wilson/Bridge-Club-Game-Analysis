@@ -194,7 +194,7 @@ tr.clickable-row:hover td { background: #e0e7ff; }
     <p style="font-size:0.85rem;color:var(--text-muted);margin-top:0.5rem;">
       Open a tournament results page on ACBL Live and click "Analyze with Bridge Classroom" in the
       <em>bridge-data-extension</em> browser extension. To analyze a club game from BWS+PBN files instead,
-      <a id="analyze-empty-link" href="./" style="color:var(--primary);">go to the file-upload page</a>.
+      <a id="analyze-empty-link" href="./?upload" style="color:var(--primary);">go to the file-upload page</a>.
     </p>
   </div>
 
@@ -203,7 +203,7 @@ tr.clickable-row:hover td { background: #e0e7ff; }
     <p><strong>Couldn't read the game data passed to this page.</strong></p>
     <p id="analyze-error-detail" style="font-size:0.85rem;color:var(--text-muted);margin-top:0.5rem;"></p>
     <p style="font-size:0.85rem;color:var(--text-muted);margin-top:0.5rem;">
-      <a id="analyze-error-link" href="./" style="color:var(--primary);">Go to the file-upload page</a>
+      <a id="analyze-error-link" href="./?upload" style="color:var(--primary);">Go to the file-upload page</a>
       to analyze a club game instead.
     </p>
   </div>
@@ -781,7 +781,9 @@ function applyUploadResponse(data, opts) {
     // Registered users: also persist the game to their Bridge Classroom
     // club_games archive (server-side, cross-device). Anonymous users are
     // skipped — their games stay in the browser (app-architecture.md M3).
-    maybeSaveClubGame(data.normalized);
+    // A restore is re-rendering a game that was already archived on arrival,
+    // so it must not POST again on every refresh.
+    if (!opts.restored) maybeSaveClubGame(data.normalized);
   }
   cachedPlayers = data.players;
   cachedBoards = data.boards;
@@ -1074,18 +1076,24 @@ document.getElementById('save-json-btn').addEventListener('click', async () => {
     setTimeout(() => { btn.textContent = 'Save JSON'; }, 2000);
   }
 });
-document.getElementById('new-file-btn').addEventListener('click', () => {
-  resetSessionState();
+/** Show the file-upload card and hide everything else. Used by the "New File"
+ *  button and by the ?upload route the empty/error cards link to — that link
+ *  promises the upload page, so it has to override the History landing. */
+function showUploadView() {
   fileInput.value = ''; fileNames.textContent = '';
-  document.getElementById('session-selector').classList.add('hidden');
   uploadArea.classList.remove('hidden');
   document.getElementById('download-help').classList.remove('hidden');
-  document.getElementById('event-header').classList.add('hidden');
-  document.getElementById('player-grid').classList.add('hidden');
-  document.getElementById('board-grid').classList.add('hidden');
-  document.getElementById('pbn-notice').classList.add('hidden');
-  document.getElementById('names-notice').classList.add('hidden');
+  for (const id of ['session-selector', 'event-header', 'player-grid', 'board-grid',
+                    'pbn-notice', 'names-notice', 'history-view',
+                    'analyze-empty', 'analyze-error']) {
+    document.getElementById(id).classList.add('hidden');
+  }
   hideAll();
+}
+
+document.getElementById('new-file-btn').addEventListener('click', () => {
+  resetSessionState();
+  showUploadView();
 });
 
 document.getElementById('export-pbn-btn').addEventListener('click', () => {
@@ -2864,19 +2872,56 @@ function isAnalyzePath() {
     || path.endsWith('/analyze') || path.endsWith('/analyze/');
 }
 
+/** True when the URL explicitly asks for the file-upload card. The empty and
+ *  error cards link here, so the landing must be the upload page even for a
+ *  browser that has saved history (which otherwise opens on History). */
+function isUploadPath() {
+  return new URLSearchParams(window.location.search).has('upload');
+}
+
+/** Drop the one-shot handoff route from the address bar once it has been
+ *  consumed. `?analyze` (or a /analyze path) names an import that has already
+ *  happened and can never happen twice — leaving it there means a refresh
+ *  re-enters the handoff with no data behind it and shows the empty card
+ *  instead of the game on screen. `#sid=` is extension bookkeeping. */
+function clearAnalyzeRoute() {
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('analyze');
+    url.pathname = url.pathname.replace(/analyze\/?$/, '');
+    if (url.hash.startsWith('#sid=')) url.hash = '';
+    history.replaceState(null, '', url.pathname + url.search + url.hash);
+  } catch (e) {}
+}
+
+/** Rebuild the whole analysis UI from the game still cached in sessionStorage.
+ *  A refresh (or a return to the page in the same tab) should show the game
+ *  that is loaded, not the upload card — the data is right there, only the
+ *  rendered state was lost. Returns false when there is nothing cached; "New
+ *  File" clears the cache, so a dismissed game never comes back. */
+function restoreCachedGame() {
+  let stored = null;
+  try { stored = sessionStorage.getItem('bc-game'); } catch (e) { return false; }
+  if (!stored) return false;
+  try {
+    const game = JSON.parse(stored);
+    applyUploadResponse(deriveUploadResponse(game), { hasPbn: true, restored: true });
+    return true;
+  } catch (e) {
+    try { sessionStorage.removeItem('bc-game'); } catch (e2) {}
+    return false;
+  }
+}
+
 function showAnalyzeEmpty() {
   uploadArea.classList.add('hidden');
   document.getElementById('download-help').classList.add('hidden');
-  const link = document.getElementById('analyze-empty-link');
-  if (link) link.href = './';
   document.getElementById('analyze-empty').classList.remove('hidden');
 }
 
 function showAnalyzeError(detail) {
   uploadArea.classList.add('hidden');
   document.getElementById('download-help').classList.add('hidden');
-  const link = document.getElementById('analyze-error-link');
-  if (link) link.href = './';
   document.getElementById('analyze-error-detail').textContent = detail || '';
   document.getElementById('analyze-error').classList.remove('hidden');
 }
@@ -3062,6 +3107,7 @@ async function bootstrapAnalyze() {
     uploadArea.classList.add('hidden');
     document.getElementById('download-help').classList.add('hidden');
     document.getElementById('batch-progress').classList.remove('hidden');
+    clearAnalyzeRoute();
     runBatch(batchItems);
     return;
   }
@@ -3088,6 +3134,10 @@ async function bootstrapAnalyze() {
 
   if (!raw) {
     showLoading(false);
+    // A refresh of the results page lands here: the handoff was consumed on the
+    // first load, but the game itself is still in sessionStorage. Show it.
+    clearAnalyzeRoute();
+    if (restoreCachedGame()) return;
     showAnalyzeEmpty();
     return;
   }
@@ -3122,6 +3172,7 @@ async function bootstrapAnalyze() {
     sessionId = data.session_id;
     mergeNamesToStorage(data.player_acbl);
     applyUploadResponse(data, { hasPbn: true });
+    clearAnalyzeRoute();
   } catch (e) {
     showAnalyzeError(`Failed to process game data: ${e.message}`);
   } finally {
@@ -3131,9 +3182,13 @@ async function bootstrapAnalyze() {
 
 try { migrateHistoryPlayerKeys(); } catch (e) { console.warn('[history] migration skipped', e); }
 
-if (isAnalyzePath()) {
+if (isUploadPath()) {
+  // Explicit request for the upload card — keep ?upload in the URL so a
+  // refresh stays here rather than restoring the previous game.
+  showUploadView();
+} else if (isAnalyzePath()) {
   bootstrapAnalyze();
-} else if (!cachedNormalized && getHistory().events.length > 0) {
+} else if (!restoreCachedGame() && getHistory().events.length > 0) {
   switchView('history');
 }
 </script>
