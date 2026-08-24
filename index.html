@@ -2717,6 +2717,27 @@ function _buildAuctionLin(auction) {
   return tokens.join('');
 }
 
+/** LIN `pc|` tokens for the cardplay from the payload.
+ *
+ *  `result.play` is card strings in play order — 'DQ', 'H10', 'S2' — which is
+ *  the order LIN wants; only the ten differs, spelled '10' in the schema and
+ *  'T' in LIN. A claimed hand stops short of 52 cards, which is normal: emit
+ *  what is there.
+ *
+ *  Returns '' for anything unrecognised rather than a malformed trace, on the
+ *  same reasoning as _buildAuctionLin: a wrong play shown as real is worse
+ *  than no play at all. */
+function _buildPlayLin(play) {
+  if (!Array.isArray(play) || !play.length) return '';
+  const tokens = [];
+  for (const card of play) {
+    const m = String(card || '').toUpperCase().match(/^([SHDC])(10|[2-9AKQJT])$/);
+    if (!m) return '';
+    tokens.push(`pc|${m[1]}${_rankToLin(m[2])}|`);
+  }
+  return tokens.join('');
+}
+
 function _buildBiddingLin(dealer, contract, declarer) {
   const m = (contract || '').match(/^(\d)(NT|[CDHS])(X{0,2})$/);
   if (!m) return '';
@@ -2761,13 +2782,33 @@ function _buildHandviewerUrl(board, result) {
       ? _buildBiddingLin(board.dealer, c, result.declarer)
       : '');
 
-  const lin = `${pnSection}md|${dealerDigit}${_formatHandLin(deal.S)},${_formatHandLin(deal.W)},${_formatHandLin(deal.N)},|sv|${vulCode}|ah|Board+${board.number}|${biddingSection}`;
+  // The cardplay, when the source captured it. This is what makes the viewer's
+  // Play/Next controls live and gives the double-dummy solver a trace to score
+  // — without it both can only show the deal.
+  const playSection = _buildPlayLin(result.play);
+
+  const lin = `${pnSection}md|${dealerDigit}${_formatHandLin(deal.S)},${_formatHandLin(deal.W)},${_formatHandLin(deal.N)},|sv|${vulCode}|ah|Board+${board.number}|${biddingSection}${playSection}`;
   return `https://www.bridgebase.com/tools/handviewer.html?lin=${encodeURIComponent(lin)}`;
 }
 
-function _linHasAuction(url) {
-  try { return (new URL(url).searchParams.get('lin') ?? '').includes('mb|'); }
-  catch { return false; }
+function _linOf(url) {
+  try { return new URL(url).searchParams.get('lin') ?? ''; }
+  catch { return ''; }
+}
+
+/** Whether an adapter-supplied handviewer URL should be replaced by one built
+ *  from the payload. Keep it only when it already carries everything we could
+ *  add: the real auction, and the cardplay whenever this row has any. A URL
+ *  with the auction but no `pc|` used to be kept, which silently dropped a
+ *  captured play — the viewer's Play controls stayed greyed out and the solver
+ *  had nothing to score. */
+function _linNeedsRebuild(url, result) {
+  const lin = _linOf(url);
+  if (!lin.includes('mb|')) return true;
+  if (!result.play?.length || lin.includes('pc|')) return false;
+  // Only worth rebuilding if the auction survives the trip — otherwise we would
+  // trade a real auction for a play.
+  return !!(result.auction?.length || (result.contract && result.declarer));
 }
 
 function enrichHandviewerUrls(normalized) {
@@ -2777,10 +2818,7 @@ function enrichHandviewerUrls(normalized) {
         for (const b of s.boards ?? []) {
           if (!b.deal || !b.dealer) continue;
           for (const r of b.results ?? []) {
-            // Keep existing URL when it already carries real auction data
-            // (e.g. BBO source). Only build synthetic URL for ACBL data
-            // where the auction is unknown.
-            if (_linHasAuction(r.handviewer_url)) continue;
+            if (!_linNeedsRebuild(r.handviewer_url, r)) continue;
             const url = _buildHandviewerUrl(b, r);
             if (url) r.handviewer_url = url;
           }
