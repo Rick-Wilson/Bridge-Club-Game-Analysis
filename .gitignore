@@ -2,3 +2,6 @@
 .cargo/
 activity-log.json
 .DS_Store
+
+# Playwright MCP writes page snapshots and console logs into the CWD.
+.playwright-mcp/
