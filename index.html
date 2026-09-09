@@ -1454,16 +1454,22 @@ function bcViewerBase() {
   return `https://bridge-classroom.${tld}/solo-practice-app/#/table`;
 }
 
-/** The double-dummy solver's front door. Pinned to `.org`: as of 2026-08-24 no
- *  solver is served on `.com`, so this deliberately does NOT mirror the page's
- *  TLD the way bcViewerBase() does. Override for local dev via:
+/** The double-dummy solver's front door. A fixed URL rather than one that
+ *  mirrors the page's TLD the way bcViewerBase() does — the solver is one
+ *  deployment, not a per-TLD pair.
+ *
+ *  It used to be `solver.bridge-classroom.org`, which the bridge-craftwork site
+ *  consolidation folded into `bridge-craftwork.com/bridge-solver/`. That
+ *  hostname no longer resolves at all, so the link had stopped being a link:
+ *  every "Open in Double-Dummy Solver" landed on a DNS error. Override for
+ *  local dev via:
  *    localStorage.setItem('bc-solver-base', 'http://localhost:5173/') */
 function bcSolverBase() {
   try {
     const override = localStorage.getItem('bc-solver-base');
     if (override) return override;
   } catch (e) {}
-  return 'https://solver.bridge-classroom.org/';
+  return 'https://bridge-craftwork.com/bridge-solver/';
 }
 
 /** Hand the solver the same LIN the embedded viewer is showing.
@@ -1668,7 +1674,7 @@ let ddFetchSeq = 0;
 // ── Double-dummy, solved in this browser ────────────────────────────────────
 //
 // Our own wasm engine (bridge-solver), vendored under static/solver/ — the same
-// build solver.bridge-classroom.org runs, and it agrees byte-for-byte with the
+// build bridge-craftwork.com/bridge-solver/ runs, and it agrees byte-for-byte with the
 // bridge-solver-service droplet. Deliberately no network call and no fallback
 // to one: a deal never leaves the browser, which is what lets the privacy
 // policy say so plainly.
