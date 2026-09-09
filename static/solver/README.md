@@ -2,7 +2,7 @@
 
 `bridge_solver_wasm.js` + `bridge_solver_wasm_bg.wasm` are copied verbatim from
 the `bridge-solver` repo (`web/src/wasm/`), which is also what
-solver.bridge-classroom.org ships. Same engine the `bridge-solver-service`
+`bridge-craftwork.com/bridge-solver/` ships. Same engine the `bridge-solver-service`
 droplet runs, so the tables agree exactly — verified byte-for-byte against
 `POST /dd` for the same deal.
 

@@ -122,11 +122,13 @@ User → Cloudflare DNS (game-analysis.bridge-classroom.com) → GitHub Pages (t
 - **Deploy:** push to `main` → `.github/workflows/deploy.yml` (`actions/upload-pages-artifact` + `actions/deploy-pages`). The workflow copies `index.html` → `404.html` for SPA routing. No build step — the SPA is hand-authored `index.html` with inlined JS/CSS.
 - **Parsing backend:** `const BASE = 'https://game-parser.bridge-craftwork.com'` in `index.html` points at `bridge-event-parser-service` (a separate repo/service) for `/api/upload` / `/api/normalized`. Deals otherwise live client-side in `sessionStorage['bc-game']`.
 - **Double-dummy solver hand-off:** the board view's `solverUrl()` link opens
-  `solver.bridge-classroom.org/?lin=…` (`bcSolverBase()`) with the same LIN the
-  embedded BBO viewer is rendering, lifted straight out of the row's
+  `bridge-craftwork.com/bridge-solver/?lin=…` (`bcSolverBase()`) with the same
+  LIN the embedded BBO viewer is rendering, lifted straight out of the row's
   `handviewer_url`. LIN, not PBN: the solver's play trace needs the auction and
-  cards, which PBN would not carry. Pinned to `.org` — there is no `.com`
-  solver — so this one does *not* mirror the page TLD.
+  cards, which PBN would not carry. One fixed URL — the solver is a single
+  deployment — so this one does *not* mirror the page TLD. It was
+  `solver.bridge-classroom.org` until Sep 2026; that host was retired by the
+  bridge-craftwork site consolidation and no longer resolves.
 - **Bridge Classroom hand-off:** `bcViewerUrl()` builds `bridge-classroom.{com|org}/solo-practice-app/#/table?pbn=…` single-board replay links (`#/bidding-practice` was retired when that route merged into the unified table — a stale hash route does not error, it falls through to the lobby and drops the `?pbn=`); the "Send to Library" button POSTs a whole game to `api.bridge-classroom.{com|org}/api/deal-library` (`bcApiBase()`), keyed to the teacher by a `?bc_owner=<id>` launch handshake from their Bridge Classroom Deal Library tab.
 
 ### Other Services on the Same Droplet
